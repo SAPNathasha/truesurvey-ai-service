@@ -1,0 +1,8 @@
+fastapi[standard]
+uvicorn[standard]
+deepface
+opencv-python
+requests
+python-dotenv
+pydantic-settings
+tf-keras
