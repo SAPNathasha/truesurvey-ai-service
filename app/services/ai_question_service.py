@@ -1,10 +1,11 @@
-import json
 import os
-import re
 from typing import Any, Dict
 
-import requests
 from fastapi import HTTPException
+from langchain_core.exceptions import OutputParserException
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_ollama import ChatOllama
 
 from app.schemas.ai_question_schema import (
     AIQuestionGenerationRequest,
@@ -12,80 +13,65 @@ from app.schemas.ai_question_schema import (
 )
 
 
-def build_prompt(request: AIQuestionGenerationRequest) -> str:
-    return f"""
-You are generating survey questions for TrueSurvey, an AI-based survey system for Sri Lanka.
+def model_to_dict(model: Any) -> Dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
 
-Return ONLY valid JSON. Do not include markdown. Do not include explanation.
+    if hasattr(model, "dict"):
+        return model.dict()
 
-The JSON must have this exact structure:
+    return dict(model)
 
-{{
-  "surveyTitle": "string",
-  "questionType": "{request.questionType.value}",
-  "questions": [
-    {{
-      "order": 1,
-      "questionText": "string",
-      "type": "{request.questionType.value}",
-      "options": ["string"],
-      "isRequired": true,
-      "helpText": "string"
-    }}
-  ]
-}}
+
+def build_prompt_template(parser: PydanticOutputParser) -> ChatPromptTemplate:
+    return ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+You are an expert survey question generator for TrueSurvey,
+an AI-based survey system for Sri Lanka.
+
+You must generate clear, unbiased, practical survey questions.
+You must not ask for sensitive information such as NIC number,
+password, OTP, bank card number, exact home address, or private financial data.
+Return only the structured output requested by the format instructions.
+""",
+            ),
+            (
+                "human",
+                """
+Generate survey questions using the details below.
 
 Survey title:
-{request.title}
+{title}
 
 Survey description:
-{request.description}
+{description}
 
 Number of questions:
-{request.numberOfQuestions}
+{number_of_questions}
 
 Question type:
-{request.questionType.value}
+{question_type}
 
 Rules:
-1. Generate exactly {request.numberOfQuestions} questions.
-2. Every question type must be "{request.questionType.value}".
-3. Use simple and clear language.
-4. Avoid duplicate questions.
-5. Do not ask for sensitive information such as NIC number, password, bank card number, OTP, exact home address, or private financial data.
-6. If questionType is "single_choice", provide 4 or 5 options.
-7. If questionType is "multiple_choice", provide 4 or 5 options.
-8. If questionType is "yes_no", options must be exactly ["Yes", "No"].
-9. If questionType is "rating_scale", options must be exactly ["1", "2", "3", "4", "5"].
-10. If questionType is "short_answer", options must be [].
-11. isRequired must be true for every question.
-"""
+1. Generate exactly {number_of_questions} questions.
+2. Every question must use this type: {question_type}.
+3. Use simple language suitable for Sri Lankan users.
+4. Do not create duplicate questions.
+5. If questionType is single_choice, provide 4 or 5 options.
+6. If questionType is multiple_choice, provide 4 or 5 options.
+7. If questionType is yes_no, options must be exactly ["Yes", "No"].
+8. If questionType is rating_scale, options must be exactly ["1", "2", "3", "4", "5"].
+9. If questionType is short_answer, options must be [].
+10. isRequired must be true for every question.
 
-
-def extract_json_object(text: str) -> Dict[str, Any]:
-    cleaned = text.strip()
-
-    cleaned = re.sub(r"^```json", "", cleaned, flags=re.IGNORECASE).strip()
-    cleaned = re.sub(r"^```", "", cleaned).strip()
-    cleaned = re.sub(r"```$", "", cleaned).strip()
-
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if not match:
-            raise HTTPException(
-                status_code=500,
-                detail="Local AI model did not return valid JSON.",
-            )
-
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            raise HTTPException(
-                status_code=500,
-                detail="Local AI model returned invalid JSON format.",
-            )
+{format_instructions}
+""",
+            ),
+        ]
+    ).partial(format_instructions=parser.get_format_instructions())
 
 
 def normalize_question_result(
@@ -106,7 +92,10 @@ def normalize_question_result(
     if len(questions) != request.numberOfQuestions:
         raise HTTPException(
             status_code=500,
-            detail=f"Local AI model generated {len(questions)} questions instead of {request.numberOfQuestions}. Please try again.",
+            detail=(
+                f"Local AI model generated {len(questions)} questions instead of "
+                f"{request.numberOfQuestions}. Please try again."
+            ),
         )
 
     for index, question in enumerate(questions, start=1):
@@ -134,11 +123,11 @@ def normalize_question_result(
 
             if not isinstance(options, list) or len(options) < 2:
                 question["options"] = [
-                    "Strongly agree",
-                    "Agree",
+                    "Very satisfied",
+                    "Satisfied",
                     "Neutral",
-                    "Disagree",
-                    "Strongly disagree",
+                    "Dissatisfied",
+                    "Very dissatisfied",
                 ]
 
     return result
@@ -150,58 +139,43 @@ def generate_ai_questions(
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     ollama_model = os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b")
 
-    url = f"{ollama_base_url}/api/generate"
-
-    payload = {
-        "model": ollama_model,
-        "system": (
-            "You are an expert survey question generator. "
-            "You must always return valid JSON only."
-        ),
-        "prompt": build_prompt(request),
-        "format": "json",
-        "stream": False,
-        "options": {
-            "temperature": 0.3,
-            "num_predict": 2500,
-        },
-    }
-
     try:
-        response = requests.post(url, json=payload, timeout=180)
+        parser = PydanticOutputParser(
+            pydantic_object=AIQuestionGenerationResponse
+        )
 
-        if response.status_code != 200:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Ollama request failed: {response.text}",
-            )
+        llm = ChatOllama(
+            model=ollama_model,
+            base_url=ollama_base_url,
+            temperature=0.2,
+            format="json",
+        )
 
-        data = response.json()
-        ai_text = data.get("response")
+        prompt = build_prompt_template(parser)
 
-        if not ai_text:
-            raise HTTPException(
-                status_code=500,
-                detail="Ollama returned an empty response.",
-            )
+        chain = prompt | llm | parser
 
-        result = extract_json_object(ai_text)
+        generated_response = chain.invoke(
+            {
+                "title": request.title,
+                "description": request.description,
+                "number_of_questions": request.numberOfQuestions,
+                "question_type": request.questionType.value,
+            }
+        )
+
+        result = model_to_dict(generated_response)
         result = normalize_question_result(result, request)
 
         return AIQuestionGenerationResponse(**result)
 
-    except requests.exceptions.ConnectionError:
+    except OutputParserException:
         raise HTTPException(
             status_code=500,
             detail=(
-                "Cannot connect to Ollama. Make sure Ollama is installed and running on http://localhost:11434."
+                "Local AI model returned invalid JSON. "
+                "Try again, reduce the number of questions, or use a better Ollama model."
             ),
-        )
-
-    except requests.exceptions.Timeout:
-        raise HTTPException(
-            status_code=500,
-            detail="Ollama took too long to generate questions. Try a smaller model or fewer questions.",
         )
 
     except HTTPException:
@@ -210,5 +184,5 @@ def generate_ai_questions(
     except Exception as error:
         raise HTTPException(
             status_code=500,
-            detail=f"Local AI question generation failed: {str(error)}",
+            detail=f"LangChain Ollama question generation failed: {str(error)}",
         )

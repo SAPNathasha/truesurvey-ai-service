@@ -9,3 +9,6 @@ tf-keras
 openai
 easyocr
 requests
+langchain
+langchain-core
+langchain-ollama
