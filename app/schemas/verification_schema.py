@@ -21,7 +21,11 @@ class FaceVerificationResponse(BaseModel):
     nicNumber: str
 
     verificationStatus: Literal["VERIFIED", "REJECTED", "MANUAL_REVIEW", "ERROR"]
+
     faceMatched: bool
+    nicMatched: bool
+
+    extractedNicNumber: Optional[str] = None
 
     distance: Optional[float] = None
     threshold: Optional[float] = None

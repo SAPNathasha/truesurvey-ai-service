@@ -7,3 +7,4 @@ python-dotenv
 pydantic-settings
 tf-keras
 openai
+easyocr

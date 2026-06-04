@@ -21,6 +21,7 @@ from app.services.image_service import (
     save_uploaded_image_to_temp_file,
 )
 from app.routers.ai_questions import router as ai_questions_router
+from app.services.nic_ocr_service import verify_nic_number_from_document
 
 
 app = FastAPI(
@@ -106,22 +107,53 @@ async def verify_face(payload: FaceVerificationRequest):
             prefix="selfie_",
         )
 
-        comparison_result = await run_in_threadpool(
+        face_result = await run_in_threadpool(
             compare_document_face_with_selfie,
             document_temp_path,
             selfie_temp_path,
         )
 
+        nic_result = await run_in_threadpool(
+            verify_nic_number_from_document,
+            document_temp_path,
+            payload.nicNumber,
+        )
+
+        face_matched = face_result["faceMatched"]
+        nic_matched = nic_result["nicMatched"]
+
+        if face_result["verificationStatus"] == "ERROR":
+            verification_status = "ERROR"
+            reason = face_result["reason"]
+
+        elif face_result["verificationStatus"] == "MANUAL_REVIEW":
+            verification_status = "MANUAL_REVIEW"
+            reason = face_result["reason"]
+
+        elif not face_matched:
+            verification_status = "REJECTED"
+            reason = "Selfie face does not match the document face."
+
+        elif not nic_matched:
+            verification_status = "REJECTED"
+            reason = nic_result["reason"]
+
+        else:
+            verification_status = "VERIFIED"
+            reason = "Face matched and submitted NIC number matches the document NIC number."
+
         return FaceVerificationResponse(
             userId=payload.userId,
             nicNumber=payload.nicNumber,
-            verificationStatus=comparison_result["verificationStatus"],
-            faceMatched=comparison_result["faceMatched"],
-            distance=comparison_result["distance"],
-            threshold=comparison_result["threshold"],
+            verificationStatus=verification_status,
+            faceMatched=face_matched,
+            nicMatched=nic_matched,
+            extractedNicNumber=nic_result["extractedNicNumber"],
+            distance=face_result["distance"],
+            threshold=face_result["threshold"],
             modelName=settings.MODEL_NAME,
             detectorBackend=settings.DETECTOR_BACKEND,
-            reason=comparison_result["reason"],
+            reason=reason,
         )
 
     except Exception as error:
@@ -130,6 +162,8 @@ async def verify_face(payload: FaceVerificationRequest):
             nicNumber=payload.nicNumber,
             verificationStatus="ERROR",
             faceMatched=False,
+            nicMatched=False,
+            extractedNicNumber=None,
             distance=None,
             threshold=None,
             modelName=settings.MODEL_NAME,
@@ -166,22 +200,53 @@ async def verify_face_with_uploaded_files(
             prefix="selfie_",
         )
 
-        comparison_result = await run_in_threadpool(
+        face_result = await run_in_threadpool(
             compare_document_face_with_selfie,
             document_temp_path,
             selfie_temp_path,
         )
 
+        nic_result = await run_in_threadpool(
+            verify_nic_number_from_document,
+            document_temp_path,
+            nicNumber,
+        )
+
+        face_matched = face_result["faceMatched"]
+        nic_matched = nic_result["nicMatched"]
+
+        if face_result["verificationStatus"] == "ERROR":
+            verification_status = "ERROR"
+            reason = face_result["reason"]
+
+        elif face_result["verificationStatus"] == "MANUAL_REVIEW":
+            verification_status = "MANUAL_REVIEW"
+            reason = face_result["reason"]
+
+        elif not face_matched:
+            verification_status = "REJECTED"
+            reason = "Selfie face does not match the document face."
+
+        elif not nic_matched:
+            verification_status = "REJECTED"
+            reason = nic_result["reason"]
+
+        else:
+            verification_status = "VERIFIED"
+            reason = "Face matched and submitted NIC number matches the document NIC number."
+
         return FaceVerificationResponse(
             userId=userId,
             nicNumber=nicNumber,
-            verificationStatus=comparison_result["verificationStatus"],
-            faceMatched=comparison_result["faceMatched"],
-            distance=comparison_result["distance"],
-            threshold=comparison_result["threshold"],
+            verificationStatus=verification_status,
+            faceMatched=face_matched,
+            nicMatched=nic_matched,
+            extractedNicNumber=nic_result["extractedNicNumber"],
+            distance=face_result["distance"],
+            threshold=face_result["threshold"],
             modelName=settings.MODEL_NAME,
             detectorBackend=settings.DETECTOR_BACKEND,
-            reason=comparison_result["reason"],
+            reason=reason,
         )
 
     except Exception as error:
@@ -190,6 +255,8 @@ async def verify_face_with_uploaded_files(
             nicNumber=nicNumber,
             verificationStatus="ERROR",
             faceMatched=False,
+            nicMatched=False,
+            extractedNicNumber=None,
             distance=None,
             threshold=None,
             modelName=settings.MODEL_NAME,
