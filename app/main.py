@@ -1,4 +1,3 @@
-import os
 from dotenv import load_dotenv
 
 # Load .env before importing settings/services that read environment variables
@@ -20,8 +19,8 @@ from app.services.image_service import (
     download_image_to_temp_file,
     save_uploaded_image_to_temp_file,
 )
-from app.routers.ai_questions import router as ai_questions_router
 from app.services.nic_ocr_service import verify_nic_number_from_document
+from app.routers.ai_questions import router as ai_questions_router
 
 
 app = FastAPI(
@@ -58,14 +57,11 @@ app.add_middleware(
 # ROUTERS
 # -----------------------------
 # This adds:
-# POST /api/v1/ai/generate-questions
-#
-# I added API key protection here too, because later Nest.js should call this service securely.
-# If you want to test AI generation without API key temporarily, remove:
-# dependencies=[Depends(verify_api_key)]
+# POST /api/ai/questions/generate
 app.include_router(
     ai_questions_router,
-    dependencies=[Depends(verify_api_key)],
+    prefix="/api/ai/questions",
+    tags=["AI Questions"],
 )
 
 
@@ -85,7 +81,7 @@ def health_check():
 
 
 # -----------------------------
-# FACE VERIFICATION ROUTE
+# FACE VERIFICATION ROUTE - URL IMAGES
 # -----------------------------
 @app.post(
     "/api/v1/verification/face-match",
@@ -175,6 +171,10 @@ async def verify_face(payload: FaceVerificationRequest):
         delete_temp_file(document_temp_path)
         delete_temp_file(selfie_temp_path)
 
+
+# -----------------------------
+# FACE VERIFICATION ROUTE - UPLOADED FILES
+# -----------------------------
 @app.post(
     "/api/v1/verification/face-match-files",
     response_model=FaceVerificationResponse,
